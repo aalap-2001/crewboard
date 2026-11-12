@@ -63,7 +63,8 @@ service cloud.firestore {
     // ---------- users ----------
     match /users/{uid} {
       // Every active teammate can read the directory (needed for assignees and @mentions).
-      allow read: if isActive();
+      // Users can always read their own profile (needed before it exists, at first sign-in).
+      allow read: if isActive() || (signedIn() && request.auth.uid == uid);
 
       // Self sign-up: a verified company user creates their own profile as a manager
       // (can create boards and manage the boards they belong to). Never admin.
