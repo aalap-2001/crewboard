@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import { Trash2, X } from "lucide-react";
 import { useSignedIn } from "@/auth/AuthProvider";
-import { deleteBoard, newId, updateBoard } from "@/lib/firestore";
+import { deleteBoard, newId, setBoardMembers, updateBoard } from "@/lib/firestore";
 import { errorMessage } from "@/lib/api";
 import { useUsers } from "@/lib/users";
 import { LABEL_COLORS, type BoardLabel, type LabelColor } from "@/lib/types";
@@ -91,7 +91,7 @@ export function BoardSettingsModal({ open, onClose }: { open: boolean; onClose: 
   const removeMember = (uid: string) => {
     if (board.memberIds.length <= 1) return toast("A board needs at least one member.", "error");
     void run(
-      () => updateBoard(board.id, { memberIds: board.memberIds.filter((m) => m !== uid) }),
+      () => setBoardMembers(user.uid, board.id, board.memberIds.filter((m) => m !== uid)),
       uid === user.uid ? "You left the board" : "Member removed. Their assignments on this board were cleared."
     ).then(() => uid === user.uid && navigate("/"));
   };
@@ -147,7 +147,7 @@ export function BoardSettingsModal({ open, onClose }: { open: boolean; onClose: 
                   size="sm"
                   disabled={!adding.length}
                   onClick={() =>
-                    void run(() => updateBoard(board.id, { memberIds: [...board.memberIds, ...adding] }), `${adding.length} added to the board`).then(() =>
+                    void run(() => setBoardMembers(user.uid, board.id, [...board.memberIds, ...adding]), `${adding.length} added to the board`).then(() =>
                       setAdding([])
                     )
                   }
@@ -208,7 +208,7 @@ export function BoardSettingsModal({ open, onClose }: { open: boolean; onClose: 
                   size="sm"
                   onClick={() =>
                     void run(async () => {
-                      await deleteBoard(board.id);
+                      await deleteBoard(user.uid, board.id);
                       onClose();
                       navigate("/");
                     }, `Board “${board.name}” deleted`)
