@@ -14,7 +14,7 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (status === "signedIn") return <Navigate to={from} replace />;
+  if (status === "signedIn" || status === "unverified") return <Navigate to={from} replace />;
   if (status === "loading" && !busy) return <FullPageSpinner />;
 
   async function onSubmit(e: FormEvent) {
@@ -30,7 +30,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthLayout title="Sign in" subtitle="Crewboard accounts are created by your team's admin.">
+    <AuthLayout title="Sign in" subtitle="Welcome back. Sign in to see your boards and tasks.">
       <form onSubmit={onSubmit} className="space-y-5" noValidate>
         {notice && !error && <Alert tone="info">{notice}</Alert>}
         {error && <Alert>{error}</Alert>}
@@ -51,6 +51,10 @@ export function LoginPage() {
         <Button type="submit" loading={busy} disabled={!email || !password} className="w-full">
           Sign in
         </Button>
+        <p className="text-center text-sm text-slate-600 dark:text-slate-400">
+          New to Crewboard?{" "}
+          <Link to="/signup" className="font-semibold text-brand-600 dark:text-brand-400">Create an account</Link>
+        </p>
       </form>
     </AuthLayout>
   );
