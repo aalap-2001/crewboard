@@ -3,6 +3,8 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
+  setDoc,
   onSnapshot,
   orderBy,
   query,
@@ -73,6 +75,24 @@ export interface ProfilePatch {
   notificationPrefs: NotificationPrefs;
 }
 
+/** Self sign-up: creates the signed-in (verified) user's own profile. Rules allow role "manager" only. */
+export function createMyProfile(uid: string, email: string, displayName: string) {
+  return setDoc(doc(db, "users", uid), {
+    uid,
+    email: email.toLowerCase(),
+    displayName: displayName.trim().slice(0, 80) || email.split("@")[0],
+    role: "manager",
+    active: true,
+    avatarUrl: null,
+    notificationPrefs: { emailOnAssignment: true, emailOnMention: true, dailyDigest: true },
+    invitedBy: null,
+    lastInviteSentAt: null,
+    claimsUpdatedAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 /** Only these fields are writable by the user (enforced in firestore.rules). */
 export function updateMyProfile(uid: string, patch: ProfilePatch) {
   return updateDoc(doc(db, "users", uid), { ...patch, updatedAt: serverTimestamp() });
@@ -131,8 +151,38 @@ export function updateBoard(
   return updateDoc(doc(db, "boards", boardId), { ...patch, updatedAt: serverTimestamp() });
 }
 
-/** Deleting a board also deletes its tasks (server-side cleanup in onBoardWritten). */
-export const deleteBoard = (boardId: string) => deleteDoc(doc(db, "boards", boardId));
+/**
+ * Changes a board's members and, in the same batch, copies them onto every task on the board
+ * (clearing assignees/mentions of anyone removed). Replaces the onBoardWritten Cloud Function.
+ */
+export async function setBoardMembers(uid: string, boardId: string, memberIds: string[]) {
+  const tasks = await getDocs(query(collection(db, "tasks"), where("boardId", "==", boardId), where("memberIds", "array-contains", uid)));
+  const keep = new Set(memberIds);
+  const batch = writeBatch(db);
+  batch.update(doc(db, "boards", boardId), { memberIds, updatedAt: serverTimestamp() });
+  tasks.docs.slice(0, 450).forEach((t) => {
+    const d = t.data();
+    batch.update(t.ref, {
+      memberIds,
+      assigneeIds: (d.assigneeIds ?? []).filter((id: string) => keep.has(id)),
+      mentionedUserIds: (d.mentionedUserIds ?? []).filter((id: string) => keep.has(id)),
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  await batch.commit();
+}
+
+/** Deletes a board's tasks, then the board (replaces server-side cleanup in onBoardWritten). */
+export async function deleteBoard(uid: string, boardId: string) {
+  const tasks = await getDocs(query(collection(db, "tasks"), where("boardId", "==", boardId), where("memberIds", "array-contains", uid)));
+  for (let i = 0; i < tasks.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    tasks.docs.slice(i, i + 400).forEach((t) => batch.delete(t.ref));
+    await batch.commit();
+  }
+  await deleteDoc(doc(db, "boards", boardId));
+}
 
 export function addColumn(boardId: string, name: string, position: number) {
   return addDoc(collection(db, "boards", boardId, "columns"), { name, position, isDone: false, createdAt: serverTimestamp() });
