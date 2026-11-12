@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { confirmPasswordReset, signInWithEmailAndPassword, verifyPasswordResetCode } from "firebase/auth";
+import { applyActionCode, confirmPasswordReset, signInWithEmailAndPassword, verifyPasswordResetCode } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { errorMessage } from "@/lib/api";
 import { Alert, Button, FullPageSpinner, TextField } from "@/components/ui";
@@ -15,6 +15,8 @@ export function AuthActionPage() {
   const mode = params.get("mode");
   const oobCode = params.get("oobCode") ?? "";
   const isSetup = mode === "setup";
+  const isVerify = mode === "verifyEmail";
+  const [verified, setVerified] = useState(false);
 
   const [email, setEmail] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -24,12 +26,22 @@ export function AuthActionPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isVerify && oobCode) {
+      applyActionCode(auth, oobCode).then(
+        async () => {
+          await auth.currentUser?.reload();
+          setVerified(true);
+        },
+        (err) => setLinkError(errorMessage(err))
+      );
+      return;
+    }
     if (!oobCode || (mode !== "setup" && mode !== "resetPassword")) {
       setLinkError("This link is incomplete. Open it again from your email.");
       return;
     }
     verifyPasswordResetCode(auth, oobCode).then(setEmail, (err) => setLinkError(errorMessage(err)));
-  }, [oobCode, mode]);
+  }, [oobCode, mode, isVerify]);
 
   const tooShort = password.length > 0 && password.length < MIN_LENGTH;
   const mismatch = confirm.length > 0 && confirm !== password;
@@ -49,9 +61,18 @@ export function AuthActionPage() {
     }
   }
 
+  if (isVerify && !linkError) {
+    if (!verified) return <FullPageSpinner />;
+    return (
+      <AuthLayout title="Email verified" subtitle="Your Crewboard account is ready.">
+        <Button className="w-full" onClick={() => window.location.assign(import.meta.env.BASE_URL)}>Continue to Crewboard</Button>
+      </AuthLayout>
+    );
+  }
+
   if (linkError) {
     return (
-      <AuthLayout title={isSetup ? "This invite link doesn't work" : "This reset link doesn't work"}>
+      <AuthLayout title={isVerify ? "This verification link doesn't work" : isSetup ? "This invite link doesn't work" : "This reset link doesn't work"}>
         <Alert>{linkError}</Alert>
         <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">
           {isSetup ? "Ask your Crewboard admin to resend your invite, or " : "You can "}
