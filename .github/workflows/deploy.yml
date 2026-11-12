@@ -62,3 +62,48 @@ jobs:
 
       - name: Deploy
         run: npx --yes firebase-tools@13 deploy --only hosting,firestore --project "$FIREBASE_PROJECT_ID" --non-interactive --force
+
+  # Publishes the web app to GitHub Pages at https://<owner>.github.io/<repo>/
+  # (Settings › Pages › Source must be "GitHub Actions").
+  pages:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      BASE_PATH: /${{ github.event.repository.name }}/
+      VITE_USE_EMULATORS: "false"
+      VITE_FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+      VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+      VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+      VITE_FUNCTIONS_REGION: ${{ vars.VITE_FUNCTIONS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build web app for Pages
+        run: |
+          npm ci --prefix web
+          npm --prefix web run build
+          # Single-page app: serve index.html for deep links like /crewboard/boards/123
+          cp web/dist/index.html web/dist/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
