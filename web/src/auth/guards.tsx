@@ -4,12 +4,14 @@ import { ShieldAlert } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import type { Role } from "@/lib/types";
 import { FullPageSpinner, StateMessage } from "@/components/ui";
+import { VerifyEmailPage } from "@/pages/VerifyEmailPage";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { status } = useAuth();
   const location = useLocation();
   if (status === "loading") return <FullPageSpinner />;
   if (status === "signedOut") return <Navigate to="/login" replace state={{ from: location }} />;
+  if (status === "unverified") return <VerifyEmailPage />;
   return <>{children}</>;
 }
 
