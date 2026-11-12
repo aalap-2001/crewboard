@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply bg-slate-50 text-slate-800 antialiased; color-scheme: light; }
+  /* The .dark class sits on <html> itself, so `dark:` variants (which target descendants) can't style it. */
+  html.dark { @apply bg-slate-950 text-slate-200; color-scheme: dark; }
+  body { @apply min-h-screen font-sans; }
+  h1, h2, h3 { @apply font-display tracking-tight text-slate-900 dark:text-white; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white dark:ring-offset-slate-950; }
+  dialog::backdrop { background: rgb(15 23 42 / 0.55); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Rendered markdown (task descriptions, comments) */
+@layer components {
+  .markdown { @apply text-sm leading-relaxed text-slate-700 dark:text-slate-300; overflow-wrap: anywhere; }
+  .markdown > * + * { @apply mt-2.5; }
+  .markdown h1, .markdown h2, .markdown h3 { @apply font-sans text-base font-semibold; }
+  .markdown a { @apply font-medium text-brand-600 underline underline-offset-2 dark:text-brand-400; }
+  .markdown ul { @apply list-disc pl-5; }
+  .markdown ol { @apply list-decimal pl-5; }
+  .markdown li + li { @apply mt-1; }
+  .markdown code { @apply rounded bg-slate-100 px-1 py-0.5 text-[0.85em] dark:bg-slate-800; }
+  .markdown pre { @apply overflow-x-auto rounded-lg bg-slate-100 p-3 dark:bg-slate-800; }
+  .markdown pre code { @apply bg-transparent p-0; }
+  .markdown blockquote { @apply border-l-2 border-slate-300 pl-3 text-slate-500 dark:border-slate-700; }
+  .markdown table { @apply w-full border-collapse text-left; }
+  .markdown th, .markdown td { @apply border border-slate-200 px-2 py-1 dark:border-slate-700; }
+  .markdown input[type="checkbox"] { @apply mr-1.5 align-middle; }
+}
