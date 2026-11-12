@@ -28,8 +28,15 @@ service cloud.firestore {
         && get(userPath(request.auth.uid)).data.active == true;
     }
 
+    // Role is read from the /users doc so self-registered users (no custom claim) work too.
     function hasRole(roles) {
-      return isActive() && request.auth.token.role in roles;
+      return isActive() && get(userPath(request.auth.uid)).data.role in roles;
+    }
+
+    // Self sign-up: verified company addresses only.
+    function allowedEmail() {
+      return request.auth.token.email_verified == true
+        && request.auth.token.email.lower().matches('.*@(healtheon[.]ai|kairosccl[.]ai)$');
     }
 
     function isAdmin()   { return hasRole(['admin']); }
@@ -58,8 +65,24 @@ service cloud.firestore {
       // Every active teammate can read the directory (needed for assignees and @mentions).
       allow read: if isActive();
 
-      // Created and deleted only by Cloud Functions / the admin script.
-      allow create, delete: if false;
+      // Self sign-up: a verified company user creates their own profile as a manager
+      // (can create boards and manage the boards they belong to). Never admin.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && allowedEmail()
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'active', 'avatarUrl',
+             'notificationPrefs', 'invitedBy', 'lastInviteSentAt', 'claimsUpdatedAt', 'createdAt', 'updatedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.role == 'manager'
+        && request.resource.data.active == true
+        && request.resource.data.invitedBy == null
+        && request.resource.data.lastInviteSentAt == null
+        && request.resource.data.claimsUpdatedAt == null
+        && request.resource.data.createdAt == request.time
+        && validProfile(request.resource.data);
+
+      allow delete: if false;
 
       // Users may edit their own profile fields only — never role, active, email or audit fields.
       allow update: if isActive()
@@ -178,11 +201,15 @@ service cloud.firestore {
         && request.resource.data.commentCount == 0
         && validTask(request.resource.data, request.resource.data.memberIds);
 
+      // memberIds may only change to match the board's members after the same batch
+      // (the client syncs tasks when board members change, replacing onBoardWritten).
       allow update: if isActive()
         && request.auth.uid in resource.data.memberIds
-        && !changedKeys().hasAny(['boardId', 'createdBy', 'createdAt', 'memberIds', 'commentCount'])
+        && !changedKeys().hasAny(['boardId', 'createdBy', 'createdAt', 'commentCount'])
+        && (!changedKeys().hasAny(['memberIds'])
+            || request.resource.data.memberIds == boardDataAfter(resource.data.boardId).memberIds)
         && (!changedKeys().hasAny(['columnId']) || columnExists(resource.data.boardId, request.resource.data.columnId))
-        && validTask(request.resource.data, resource.data.memberIds);
+        && validTask(request.resource.data, request.resource.data.memberIds);
 
       // Task creator, or an admin/manager on the board.
       allow delete: if isActive()
