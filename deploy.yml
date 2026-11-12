@@ -1,0 +1,61 @@
+name: Deploy to Firebase
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-firebase
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      APP_URL: ${{ vars.APP_URL }}
+      DIGEST_TIMEZONE: ${{ vars.DIGEST_TIMEZONE }}
+      VITE_USE_EMULATORS: "false"
+      VITE_FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+      VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+      VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+      VITE_FUNCTIONS_REGION: ${{ vars.VITE_FUNCTIONS_REGION }}
+      HAS_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+    steps:
+      - name: Check configuration
+        run: |
+          missing=""
+          for v in FIREBASE_PROJECT_ID APP_URL DIGEST_TIMEZONE VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_APP_ID VITE_FUNCTIONS_REGION; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          [ "$HAS_SERVICE_ACCOUNT" != "true" ] && missing="$missing FIREBASE_SERVICE_ACCOUNT(secret)"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing Actions settings:$missing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          npm ci --prefix functions
+          npm ci --prefix web
+
+      - name: Write functions environment file
+        run: |
+          printf 'APP_URL=%s\nDIGEST_TIMEZONE=%s\n' "$APP_URL" "$DIGEST_TIMEZONE" > "functions/.env.$FIREBASE_PROJECT_ID"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy
+        run: npx --yes firebase-tools@13 deploy --project "$FIREBASE_PROJECT_ID" --non-interactive --force
