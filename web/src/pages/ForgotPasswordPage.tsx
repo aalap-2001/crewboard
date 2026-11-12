@@ -1,7 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { MailCheck } from "lucide-react";
-import { api, errorMessage } from "@/lib/api";
+import { sendPasswordResetEmail } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { appUrl } from "@/auth/AuthProvider";
+import { errorMessage } from "@/lib/api";
 import { Alert, Button, TextField } from "@/components/ui";
 import { AuthLayout } from "./AuthLayout";
 
@@ -16,7 +19,12 @@ export function ForgotPasswordPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.requestPasswordReset({ email: email.trim() });
+      try {
+        await sendPasswordResetEmail(auth, email.trim(), { url: appUrl("/login") });
+      } catch (err) {
+        // Don't reveal whether an account exists.
+        if ((err as { code?: string }).code !== "auth/user-not-found") throw err;
+      }
       setSent(true);
     } catch (err) {
       setError(errorMessage(err));
