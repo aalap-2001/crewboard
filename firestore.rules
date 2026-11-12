@@ -1,0 +1,253 @@
+rules_version = '2';
+
+// Crewboard Firestore security rules.
+// Covers /users (phase 1), boards, columns, tasks, comments, activity (phase 2) and
+// notifications (phase 3). Anything not matched is denied by the catch-all at the bottom.
+//
+// Note: user creation, role changes and activation changes are never done from the client.
+// They go through admin-only Cloud Functions (Admin SDK bypasses these rules), which keeps
+// the role custom claim and the mirrored /users.role field in sync.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    // Signed in AND has a /users doc with active == true.
+    // Checked on every request so a deactivated user loses access immediately,
+    // even while their current ID token is still valid.
+    function isActive() {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.active == true;
+    }
+
+    function hasRole(roles) {
+      return isActive() && request.auth.token.role in roles;
+    }
+
+    function isAdmin()   { return hasRole(['admin']); }
+    function isManager() { return hasRole(['admin', 'manager']); }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function validProfile(d) {
+      return d.displayName is string
+        && d.displayName.size() >= 1 && d.displayName.size() <= 80
+        && (d.get('avatarUrl', null) == null
+            || (d.avatarUrl is string && d.avatarUrl.size() <= 500 && d.avatarUrl.matches('^https://.+')))
+        && d.notificationPrefs is map
+        && d.notificationPrefs.keys().hasOnly(['emailOnAssignment', 'emailOnMention', 'dailyDigest'])
+        && d.notificationPrefs.keys().hasAll(['emailOnAssignment', 'emailOnMention', 'dailyDigest'])
+        && d.notificationPrefs.emailOnAssignment is bool
+        && d.notificationPrefs.emailOnMention is bool
+        && d.notificationPrefs.dailyDigest is bool
+        && d.updatedAt == request.time;
+    }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      // Every active teammate can read the directory (needed for assignees and @mentions).
+      allow read: if isActive();
+
+      // Created and deleted only by Cloud Functions / the admin script.
+      allow create, delete: if false;
+
+      // Users may edit their own profile fields only — never role, active, email or audit fields.
+      allow update: if isActive()
+        && request.auth.uid == uid
+        && changedKeys().hasOnly(['displayName', 'avatarUrl', 'notificationPrefs', 'updatedAt'])
+        && validProfile(request.resource.data);
+    }
+
+    // ---------- boards ----------
+    function boardPath(boardId) {
+      return /databases/$(database)/documents/boards/$(boardId);
+    }
+    function boardData(boardId)      { return get(boardPath(boardId)).data; }
+    function boardDataAfter(boardId) { return getAfter(boardPath(boardId)).data; }
+    function isBoardMember(boardId)  { return isActive() && request.auth.uid in boardData(boardId).memberIds; }
+    function isBoardManager(boardId) { return isManager() && request.auth.uid in boardData(boardId).memberIds; }
+
+    function validLabels(labels) {
+      return labels is list && labels.size() <= 30;
+    }
+
+    function validBoard(d) {
+      return d.keys().hasOnly(['name', 'description', 'memberIds', 'labels', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
+        && d.description is string && d.description.size() <= 500
+        && d.memberIds is list && d.memberIds.size() >= 1 && d.memberIds.size() <= 100
+        && validLabels(d.labels)
+        && d.updatedAt == request.time;
+    }
+
+    match /boards/{boardId} {
+      // Only members can see a board (list queries must filter memberIds array-contains uid).
+      allow read: if isActive() && request.auth.uid in resource.data.memberIds;
+
+      // Admins and managers create boards and must include themselves.
+      allow create: if isManager()
+        && validBoard(request.resource.data)
+        && request.auth.uid in request.resource.data.memberIds
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+
+      // Managers (who are members) edit anything; other members may only edit labels.
+      allow update: if isActive()
+        && request.auth.uid in resource.data.memberIds
+        && validBoard(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (isManager() || changedKeys().hasOnly(['labels', 'updatedAt']));
+
+      allow delete: if isManager() && request.auth.uid in resource.data.memberIds;
+
+      // ----- columns -----
+      function validColumn(d) {
+        return d.keys().hasOnly(['name', 'position', 'isDone', 'createdAt'])
+          && d.name is string && d.name.size() >= 1 && d.name.size() <= 40
+          && d.position is number
+          && d.isDone is bool
+          && d.createdAt is timestamp;
+      }
+
+      match /columns/{columnId} {
+        allow read: if isBoardMember(boardId);
+        // getAfter() so default columns can be created in the same batch as the board.
+        allow create: if isManager()
+          && request.auth.uid in boardDataAfter(boardId).memberIds
+          && validColumn(request.resource.data);
+        allow update: if isBoardManager(boardId) && validColumn(request.resource.data);
+        allow delete: if isBoardManager(boardId);
+      }
+    }
+
+    // ---------- tasks ----------
+    function subsetOf(ids, members) {
+      return ids is list && ids.toSet().difference(members.toSet()).size() == 0;
+    }
+
+    function validTask(d, members) {
+      return d.keys().hasOnly([
+          'boardId', 'columnId', 'position', 'title', 'description', 'priority', 'labelIds', 'dueDate',
+          'assigneeIds', 'mentionedUserIds', 'memberIds', 'checklist', 'attachments', 'done',
+          'commentCount', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.title is string && d.title.size() >= 1 && d.title.size() <= 200
+        && d.description is string && d.description.size() <= 20000
+        && d.priority in ['low', 'medium', 'high', 'urgent']
+        && d.labelIds is list && d.labelIds.size() <= 20
+        && (d.dueDate == null || (d.dueDate is string && d.dueDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')))
+        && d.assigneeIds.size() <= 20 && subsetOf(d.assigneeIds, members)
+        && d.mentionedUserIds.size() <= 100 && subsetOf(d.mentionedUserIds, members)
+        && d.checklist is list && d.checklist.size() <= 100
+        && d.attachments is list && d.attachments.size() <= 50
+        && d.position is number
+        && d.done is bool
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
+
+    function columnExists(boardId, columnId) {
+      return exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(columnId));
+    }
+
+    match /tasks/{taskId} {
+      // memberIds mirrors the board's members (kept in sync by onBoardWritten).
+      // Assignees and mentioned users are always board members, so these branches only
+      // make "My Tasks" queries (assigneeIds / mentionedUserIds array-contains) provable.
+      allow read: if isActive() && (
+        request.auth.uid in resource.data.memberIds
+        || request.auth.uid in resource.data.assigneeIds
+        || request.auth.uid in resource.data.mentionedUserIds);
+
+      allow create: if isActive()
+        && request.auth.uid in boardData(request.resource.data.boardId).memberIds
+        && request.resource.data.memberIds == boardData(request.resource.data.boardId).memberIds
+        && columnExists(request.resource.data.boardId, request.resource.data.columnId)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.commentCount == 0
+        && validTask(request.resource.data, request.resource.data.memberIds);
+
+      allow update: if isActive()
+        && request.auth.uid in resource.data.memberIds
+        && !changedKeys().hasAny(['boardId', 'createdBy', 'createdAt', 'memberIds', 'commentCount'])
+        && (!changedKeys().hasAny(['columnId']) || columnExists(resource.data.boardId, request.resource.data.columnId))
+        && validTask(request.resource.data, resource.data.memberIds);
+
+      // Task creator, or an admin/manager on the board.
+      allow delete: if isActive()
+        && request.auth.uid in resource.data.memberIds
+        && (resource.data.createdBy == request.auth.uid || isManager());
+
+      function taskData() {
+        return get(/databases/$(database)/documents/tasks/$(taskId)).data;
+      }
+      function isTaskMember() {
+        return isActive() && request.auth.uid in taskData().memberIds;
+      }
+
+      // ----- comments -----
+      function validCommentBody(d) {
+        return d.body is string && d.body.size() >= 1 && d.body.size() <= 10000
+          && subsetOf(d.mentionedUserIds, taskData().memberIds);
+      }
+
+      match /comments/{commentId} {
+        allow read: if isTaskMember();
+        allow create: if isTaskMember()
+          && request.resource.data.keys().hasOnly(['authorId', 'body', 'mentionedUserIds', 'edited', 'createdAt', 'updatedAt'])
+          && request.resource.data.authorId == request.auth.uid
+          && validCommentBody(request.resource.data)
+          && request.resource.data.edited == false
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        // Only the author can edit or delete their comment.
+        allow update: if isTaskMember()
+          && resource.data.authorId == request.auth.uid
+          && changedKeys().hasOnly(['body', 'mentionedUserIds', 'edited', 'updatedAt'])
+          && validCommentBody(request.resource.data)
+          && request.resource.data.edited == true
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if isActive() && resource.data.authorId == request.auth.uid;
+      }
+
+      // ----- activity (server-written) -----
+      match /activity/{eventId} {
+        allow read: if isTaskMember();
+        allow write: if false;
+      }
+    }
+
+    // ---------- notifications ----------
+    // Created by Cloud Functions only. Recipients can read theirs and mark them read.
+    match /notifications/{notificationId} {
+      allow read: if isActive() && resource.data.recipientId == request.auth.uid;
+      allow update: if isActive()
+        && resource.data.recipientId == request.auth.uid
+        && changedKeys().hasOnly(['read', 'readAt'])
+        && request.resource.data.read is bool
+        && (request.resource.data.readAt == null || request.resource.data.readAt == request.time);
+      allow create, delete: if false;
+    }
+
+    // ---------- server-only collections ----------
+    match /_throttle/{id} {
+      allow read, write: if false;
+    }
+
+    // ---------- everything else (enabled in later phases) ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

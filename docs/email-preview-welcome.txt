@@ -1,0 +1,17 @@
+Crewboard
+=========
+
+Welcome to Crewboard
+
+Hi Priya Rao,
+
+Aalap Harathi added you to your team's Crewboard as a member. Crewboard is where your crew plans work, picks up tasks and keeps everything moving.
+
+Choose a password to finish setting up your account.
+
+Set up my account: https://crewboard.example/auth/action?mode=setup&oobCode=SAMPLE
+
+This link works for 1 hour. If it expires, ask your admin to resend the invite. If you weren't expecting this, you can ignore this email.
+
+--
+Crewboard — Your crew, your board, your flow.
